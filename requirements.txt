@@ -1,0 +1,6 @@
+matplotlib
+pandas==1.5.3
+requests
+seaborn
+shiny
+wordcloud

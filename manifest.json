@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "locale": "de_DE.UTF-8",
+  "metadata": {
+    "appmode": "python-shiny",
+    "entrypoint": "app"
+  },
+  "python": {
+    "version": "3.11.7",
+    "package_manager": {
+      "name": "pip",
+      "version": "23.2.1",
+      "package_file": "requirements.txt"
+    }
+  },
+  "files": {
+    "requirements.txt": {
+      "checksum": "0441892eab1a2898d317381e309d1f76"
+    },
+    "README.md": {
+      "checksum": "7ef8101e06c3d380eaa5600e8338d42b"
+    },
+    "app.py": {
+      "checksum": "b64ef6bf1d4e6a0e0b2bc5a9b7f6845e"
+    }
+  }
+}
