@@ -1,15 +1,27 @@
 # rsconnect deploy shiny ../shinyeintopfanalytics --name eintopfanalytics --title eintopfanalytics
 
-from shiny import render, reactive
-from shiny.express import input, ui
+from shiny.express import input, render, ui
+from shinywidgets import render_plotly
+import plotly.graph_objs as go
 
+import plotly.express as px
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 import wordcloud
 import datetime
 import numpy as np
+from faicons import icon_svg as icon
+
+# todos:
+# heatmap nach neuester veranstaltung sortieren
+# heatmap einklappbar machen
+# Veranstaltungssteigerung pro Monat ausrechnen und anzeigen
+# AUf Github verlinken
+# Anzahl Gruppen im Zeitverlauf
+# Gruppen mit Veranstaltung in letzten 12 Monaten
+# Gruppen mit offensichtlich mehreren Namen zusammenführen
+# Icons sinnvoll auswählen
 
 NOW = datetime.datetime.now()
 
@@ -19,13 +31,8 @@ SNS_FONT_SIZE = 0.7
 HEATMAP_STEP_SIZE = 20
 MAX_GROUP_NAME_LEN = 30
 
-sns.set_theme(style="darkgrid")
-sns.set(font="courier", font_scale=SNS_FONT_SIZE)
-
-
-### Datenaufbereitung 
-#@reactive.calc
-#def filter_subevents(df):
+HEIGHT1 = 2000
+FONT_SIZE1 = 9
 
 # Daten scrapen
 groups_raw = requests.get("https://eintopf.info/api/v1/groups").json()
@@ -52,8 +59,8 @@ for event in events_raw:
             if len(group) > MAX_GROUP_NAME_LEN 
             else group
         )
-        if len(group_label) < MAX_GROUP_NAME_LEN:
-            group_label = " " * (MAX_GROUP_NAME_LEN - len(group_label)) + group_label
+        #if len(group_label) < MAX_GROUP_NAME_LEN:
+        #    group_label = " " * (MAX_GROUP_NAME_LEN - len(group_label)) + group_label
 
         events.append({
             "group": group,
@@ -65,8 +72,6 @@ for event in events_raw:
             "subevent": True if parents.count(event["parent"]) >= 2 else False,
             "parent": event["parent"]
         })
-
-
 
 df = pd.DataFrame(events)
 
@@ -85,10 +90,10 @@ df["event_yearmonth"] = df["event_yearmonth"].apply(lambda x: int(x))
 
 df["counter"] = 1
 
-df["past_month"] = True
+df["future"] = False
 for i, row in df.iterrows():
     if row.event_year >= NOW.year and row.event_month > NOW.month:
-        df.loc[i, "past_month"] = False
+        df.loc[i, "future"] = True
 
 df = (
     df
@@ -96,331 +101,277 @@ df = (
     .reset_index()
 )
 
+df_group_event = df.copy()
 
-
-#if input.no_subevents():
-#    df = df[df["subevent"] != True]
-#return df
+def filter_df(df):
+    if input.drop_subevents():
+        df = df[df["subevent"]!=True]
     
-#return df
+    if input.drop_kb():
+        df = df[df["group"]!="Kesselbambule"]
+    
+    if input.drop_future():
+        df = df[df["future"]!=True]
+    return df
 
+
+
+####################################################################################
 
 ### App
-ui.h1("Eintopf Analytics")
-ui.hr()
-ui.input_switch(
-    "no_subevents", 
-    "Keine regelmäßigen Veranstaltungen/Unterveranstaltungen anzeigen", 
-    False,
-    )
-ui.h4("Monatl. Veranstaltungshäufigkeit im Zeitverlauf")
+
+ui.page_opts(title = "Eintopf Analytics")
+
+# Sidebar
+with ui.sidebar():
+    ui.h6("Globale Filter")
+    ui.input_switch(
+        "drop_subevents", 
+        "Unterveranstaltungen ausschließen", 
+        False,
+        )
+    ui.input_switch(
+        "drop_kb", 
+        "Kesselbambule ausschließen", 
+        True,
+        )
+    ui.input_switch(
+        "drop_future", 
+        "Zukunft ausschließen", 
+        True,
+        )
+    
+    ui.hr()
+    ui.h6("Info")
+    ui.help_text("Die verwendeten Daten werden mit jedem Aufruf dieser Seite von hier geladen: eintopf.info/api/v1/events")
 
 
+with ui.layout_column_wrap():
 
-# Liniendiagramm: Veranstaltungshäufigkeit im Zeitverlauf
-@render.plot
-def freq_history():
-    #df = filter_subevents(df)
-    df = df.drop_duplicates(["event_name", "event_datetime"])
+    with ui.value_box(showcase=icon("flag")):
+        "Events"
+        @render.express
+        def n_events():
+            df = df_group_event.copy()
+            df = filter_df(df)
+            str(df.counter.sum())
 
-    df_listed = df.loc[df.listed_group==True,:]
-    df_notlisted = df.loc[df.listed_group==False,:]
+    with ui.value_box(showcase=icon("arrow-trend-up")):
+        "Events im Monat"
+        @render.express
+        def n_events2():
+            df = df_group_event.copy()
+            df = filter_df(df)
+            str(round(df.groupby("event_year-month_str").counter.sum().reset_index().counter.mean()))
 
-    def summonthly(df):
-        return (
+    
+    with ui.value_box(showcase=icon("users")):
+        "Gruppen"
+        @render.express
+        def n_groups():
+            df = df_group_event.copy()
+            df = filter_df(df)
+            str(len(df.group.unique()))
+    
+    with ui.value_box(showcase=icon("users")):
+        "Gruppen mit mind. 2 Events"
+        @render.express
+        def n_groups2():
+            df = df_group_event.copy()
+            df = filter_df(df)
+            df = df.groupby("group").counter.sum().reset_index()
+            df = df.loc[df.counter > 1]
+            str(len(df.group.unique()))
+            
+
+with ui.layout_column_wrap():
+    # Liniendiagramm
+    with ui.card(full_screen=True):
+        ui.card_header("Monatl. Veranstaltungshäufigkeit im Zeitverlauf")
+        
+        
+        @render_plotly
+        def freq_history():
+            # Datensatz aufbereiten
+            df = df_group_event.copy()
+            df = filter_df(df)
+            df = df.drop_duplicates(["event_name", "event_datetime"])
+            df_monthly = df.groupby(by="event_year-month_str")["counter"].sum().reset_index()
+            df_monthly["event_year-month_str"] = pd.to_datetime(df_monthly["event_year-month_str"])
+            
+            if not input.show_trend_line():
+                # Diagramm erstellen
+                fig = px.line(
+                    df_monthly,
+                    x="event_year-month_str", 
+                    y="counter",
+                    labels={
+                        "event_year-month_str": "Monat",
+                        "counter": "Anzahl Veranstaltungen",
+                        },
+                    )
+            else:
+                fig = px.scatter(
+                    df_monthly,
+                    x="event_year-month_str", 
+                    y="counter",
+                    labels={
+                        "event_year-month_str": "Monat",
+                        "counter": "Anzahl Veranstaltungen",
+                        },
+                    trendline="lowess",
+                    )
+            #fig = px.scatter(df, x="date", y="GOOG", trendline="lowess")
+            return fig
+        ui.input_switch("show_trend_line", "Trend anzeigen", False)
+
+    # Balkendiagramm: Veranstaltungshäufigkeit nach Wochentag
+    with ui.card(full_screen=True):
+        ui.card_header("Veranstaltungshäufigkeit nach Wochentag")
+
+        @render_plotly
+        def freq_by_day():
+            df = df_group_event.copy()
+            df = filter_df(df)
+            df = df.drop_duplicates(["event_name", "event_datetime"])
+            df["weekday"] = df["event_datetime"].apply(lambda x: x.weekday())
+
+            labels={
+                "weekday": "Wochentag",
+                "perc": "% Veranstaltungen",
+                "event_year_str": "Jahr",
+            }
+
+            if input.weekdays_per_year():
+                df_year_day = df.copy()
+                df_year_day["year_sum"] = df_year_day.groupby("event_year").counter.transform(sum)
+                df_year_day["perc"] = (df_year_day["counter"] / df_year_day["year_sum"]) * 100
+                df_year_day = df_year_day.groupby(["event_year_str", "weekday"])["perc"].sum().reset_index()
+                fig = px.bar(data_frame=df_year_day, x="weekday", y="perc", color="event_year_str", barmode='group', labels=labels)
+            
+            else:
+                df_day = df.copy()
+                df_day = df_day.groupby(["weekday"])["counter"].sum().reset_index()
+                df_day["perc"] = (df_day.counter / df_day.counter.sum()) * 100
+                fig = px.bar(data_frame=df_day, x="weekday", y="perc", labels=labels)
+            
+            fig.update_xaxes(
+                labelalias={
+                    0: "Mo",
+                    1: "Di",
+                    2: "Mi",
+                    3: "Do",
+                    4: "Fr",
+                    5: "Sa",
+                    6: "So",
+                },
+            )
+            return fig
+
+        ui.input_switch("weekdays_per_year", "pro Jahr anzeigen", False)
+        
+
+
+with ui.layout_column_wrap():
+    def create_heatmap():
+        df = df_group_event.copy()
+        df = filter_df(df)
+
+        df["total"] = df.groupby("group_label").counter.transform(sum)
+
+        df_monthly = (
             df
-            .groupby(by="event_year-month_str")
+            .groupby(by=["group_label", "event_year-month_str"])
             ["counter"]
             .sum()
             .reset_index()
         )
+        #df_monthly["counter"] = df_monthly["counter"].apply(lambda x: 4 if x >= 4 else x)
+        df_monthly_pivot = (
+            df_monthly
+            .pivot(columns="event_year-month_str", index="group_label", values="counter")
+            .fillna(0)
+        )
         
-    df_monthly_past = summonthly(df.loc[df["past_month"] == True])
-    df_monthly_future = summonthly(df.loc[df["past_month"] == False])
-    df_monthly_past_listed = summonthly(df_listed.loc[df_listed["past_month"] == True])
-    df_monthly_future_listed = summonthly(df_listed.loc[df_listed["past_month"] == False])
-    df_monthly_past_notlisted = summonthly(df_notlisted.loc[df_notlisted["past_month"] == True])
-    df_monthly_future_notlisted = summonthly(df_notlisted.loc[df_notlisted["past_month"] == False])
+        df["max_event_yearmonth"] = df.groupby(["group_label"]).event_yearmonth.transform(max)
+        df["min_event_yearmonth"] = df.groupby(["group_label"]).event_yearmonth.transform(min)
+        group_order = (
+            df
+            .groupby("group_label")
+            [["max_event_yearmonth", "min_event_yearmonth"]]
+            .mean()
+            .reset_index()
+            .sort_values(["max_event_yearmonth", "min_event_yearmonth"])
+            .group_label
+            .to_list()
+        )
 
-    fig, ax = plt.subplots()
+        df_monthly_pivot.index = pd.CategoricalIndex(
+            df_monthly_pivot.index,
+            categories=group_order,
+            )
+        df_monthly_pivot.sort_index(level=0, inplace=True, ascending=False)
+        
+        fig, ax = plt.subplots()
+        fig.set_size_inches(20,20)
+        
+        fig = px.imshow(
+            df_monthly_pivot,
+            text_auto=False,
+            color_continuous_scale='Greys',
+            labels={
+                "y": "Gruppe",
+                "x": "Monat",
+                "color": "Anzahl",
+                },
+            zmax=4,
+            )
+        fig.update_layout(
+            height=HEIGHT1,
+            coloraxis_showscale=False,
+            yaxis = dict(
+                tickfont = dict(size=FONT_SIZE1)),
+            )
+        return fig
 
-    if input.all_groups():
-        sns.lineplot(
-            data=df_monthly_past,
-            x="event_year-month_str",
-            y="counter",
-            ax=ax,
-            color="black",
-        )
-        sns.scatterplot(
-            data=df_monthly_past,
-            x="event_year-month_str",
-            y="counter",
-            ax=ax,
-            color="black",
-            label="Alle Gruppen",
-        )
-        if not input.history_only_past():
-            sns.lineplot(
-                data=df_monthly_future,
-                x="event_year-month_str",
-                y="counter",
-                ax=ax,
-                linestyle='--',
-                color="black"
-            )
-            sns.scatterplot(
-                data=df_monthly_future,
-                x="event_year-month_str",
-                y="counter",
-                ax=ax,
-                color="black"
-            )
+    with ui.card(full_screen=True):
+        ui.card_header("Monatl. Veranstaltungshäufigkeit pro Gruppe")
+        @render_plotly()
+        def heatmap():
+            return create_heatmap()
+        
+        ui.card_footer("Info: Werte >= 4 werden in derselben Farbe dargestellt.")
 
-    if input.listed_groups():
-        sns.lineplot(
-            data=df_monthly_past_listed,
-            x="event_year-month_str",
-            y="counter",
-            ax=ax,
-            color="orange",
-        )
-        sns.scatterplot(
-            data=df_monthly_past_listed,
-            x="event_year-month_str",
-            y="counter",
-            ax=ax,
-            color="orange",
-            label="Gruppen mit Account",
-        )
-        if not input.history_only_past():
-            sns.lineplot(
-                data=df_monthly_future_listed,
-                x="event_year-month_str",
-                y="counter",
-                ax=ax,
-                linestyle='--',
-                color="orange",
-            )
-            sns.scatterplot(
-                data=df_monthly_future_listed,
-                x="event_year-month_str",
-                y="counter",
-                ax=ax,
-                color="orange",
+    def create_barplot():
+        df = df_group_event.copy()
+        df = filter_df(df)
+        df = df["group_label"].value_counts().reset_index()
+        df = df.sort_values("group_label", ascending=True)
+
+        max_freq = df.group_label.max()
+
+        fig = px.bar(
+            data_frame=df, 
+            x="group_label", 
+            y="index", 
+            orientation='h',
+            labels={
+                "group_label": "Anzahl",
+                "index": "Gruppe",
+                },
             )
 
-    if input.notlisted_groups():
-        sns.lineplot(
-            data=df_monthly_past_notlisted,
-            x="event_year-month_str",
-            y="counter",
-            ax=ax,
-            color="steelblue",
-        )
-        sns.scatterplot(
-            data=df_monthly_past_notlisted,
-            x="event_year-month_str",
-            y="counter",
-            ax=ax,
-            color="steelblue",
-            label="Gruppen mit Account",
-        )
-        if not input.history_only_past():
-            sns.lineplot(
-                data=df_monthly_future_notlisted,
-                x="event_year-month_str",
-                y="counter",
-                ax=ax,
-                linestyle='--',
-                color="steelblue",
+        fig.update_layout(
+            height=HEIGHT1,
+            coloraxis_showscale=False,
+            yaxis = dict(
+                tickfont = dict(size=FONT_SIZE1)),
             )
-            sns.scatterplot(
-                data=df_monthly_future_notlisted,
-                x="event_year-month_str",
-                y="counter",
-                ax=ax,
-                color="steelblue",
-            )
-    ax.xaxis.set_major_locator(plt.MaxNLocator(16))
-    plt.xticks(rotation=45)
-    plt.xlabel("Monat")
-    plt.ylabel("Anzahl Veranstaltungen")
-    return fig
+        
+        return fig
 
-ui.input_switch("all_groups", "alle Gruppen", True)
-ui.input_switch("listed_groups", "Gruppen mit Account", False)
-ui.input_switch("notlisted_groups", "Gruppen ohne Account", False)
-ui.input_switch("history_only_past", "nur Vergangenheit anzeigen", False)
-
-
-# Balkendiagramm: Veranstaltungshäufigkeit nach Wochentag
-ui.hr()
-ui.h4("Veranstaltungshäufigkeit nach Wochentag")
-
-@render.plot
-def freq_by_day():
-    df = filter_subevents(df)
-    df = df.drop_duplicates(["event_name", "event_datetime"])
-
-    
-    
-    df = df.loc[df["past_month"] == True]
-
-    #df = df.loc[df["group"] != "Kesselbambule"]
-    
-    df["weekday"] = df["event_datetime"].apply(lambda x: x.weekday())
-    df["year_sum"] = df.groupby("event_year").counter.transform(sum)
-    df["counter"] = df["counter"] / df["year_sum"]
-    df_day = df.groupby(["event_year_str", "weekday"])["counter"].sum().reset_index()
-    
-    fig, ax = plt.subplots()
-    g = sns.barplot(
-        data=df_day, 
-        x="weekday", 
-        y="counter", 
-        hue= "event_year_str" if input.weekdays_per_year() else None, 
-        ax=ax,
-        )
-    g.set_xticklabels(['Mo','Di','Mi','Do','Fr','Sa','So'])
-    plt.xlabel("Wochentag")
-    plt.ylabel("Anteil der Veranstaltungen")
-    
-    if input.weekdays_per_year():
-        plt.legend(title="Jahr")
-    
-    return fig
-
-ui.input_switch("weekdays_per_year", "pro Jahr anzeigen", False)
-
-
-ui.hr()
-ui.h4("Monatl. Veranstaltungshäufigkeit pro Gruppe")
-
-
-def create_heatmap(i, show_xlabel=True, buffer=0):
-    df = filter_subevents(df)
-    
-    if input.heatmap_only_past():
-        df = df[df["past_month"] == True]
-
-    df["total"] = df.groupby("group_label").counter.transform(sum)
-
-    df_monthly = (
-        df
-        .groupby(by=["group_label", "event_year-month_str"])
-        ["counter"]
-        .sum()
-        .reset_index()
-    )
-
-    df_monthly_pivot = (
-        df_monthly
-        .pivot(columns="event_year-month_str", index="group_label", values="counter")
-        .fillna(0)
-    )
-    
-    df["max_event_yearmonth"] = df.groupby(["group_label"]).event_yearmonth.transform(max)
-    df["min_event_yearmonth"] = df.groupby(["group_label"]).event_yearmonth.transform(min)
-    group_order = (
-        df
-        .groupby("group_label")
-        [["max_event_yearmonth", "min_event_yearmonth"]]
-        .mean()
-        .reset_index()
-        .sort_values(["max_event_yearmonth", "min_event_yearmonth"])
-        .group_label
-        .to_list()
-    )
-
-    df_monthly_pivot.index = pd.CategoricalIndex(
-        df_monthly_pivot.index,
-        categories=group_order,
-        )
-    df_monthly_pivot.sort_index(level=0, inplace=True, ascending=False)
-    
-    fig, ax = plt.subplots()
-    fig.set_size_inches(20,20)
-    g = sns.heatmap(
-        data=df_monthly_pivot[i:i+HEATMAP_STEP_SIZE+buffer],
-        linewidths=.5,
-        cmap="Reds",
-        cbar=False,
-        ax=ax,
-        vmax=4,
-        vmin=0,
-
-    )
-    plt.xticks(rotation=90)
-    xlabels = [t.get_text() for t in ax.get_xticklabels()]
-    xlabels = [(xlabels[i] if i % 3 == 0 else None) for i in range(len(xlabels))]
-
-    ax.set_xticklabels(xlabels)
-    if show_xlabel:
-        plt.xlabel("Monat", fontsize=SNS_FONT_SIZE)
-    plt.ylabel("Gruppe (nur eingetragene)", fontsize=SNS_FONT_SIZE)
-    return fig
-
-
-@render.plot()
-def heatmap():
-    return create_heatmap(0 * HEATMAP_STEP_SIZE)
-
-@render.plot()
-def heatmap2():
-    return create_heatmap(1 * HEATMAP_STEP_SIZE)
-
-@render.plot()
-def heatmap3():
-    return create_heatmap(2 * HEATMAP_STEP_SIZE)
-
-@render.plot()
-def heatmap4():
-    return create_heatmap(3 * HEATMAP_STEP_SIZE)
-
-@render.plot()
-def heatmap5():
-    return create_heatmap(4 * HEATMAP_STEP_SIZE)
-
-@render.plot()
-def heatmap6():
-    return create_heatmap(5 * HEATMAP_STEP_SIZE)
-
-@render.plot()
-def heatmap7():
-    return create_heatmap(6 * HEATMAP_STEP_SIZE + 5)
-
-ui.input_switch("heatmap_only_past", "nur Vergangenheit anzeigen", False)
-
-ui.hr()
-ui.h4("Die 50 Gruppen mit den meisten Veranstaltungen")
-
-def create_barplot(i):
-    df = filter_subevents(df)
-    df = df["group_label"].value_counts().reset_index()
-
-    max_freq = df.group_label.max()
-
-    df = df[i:i+25]
-
-    fig, ax = plt.subplots()
-    
-    sns.barplot(
-        data=df,
-        x="group_label",
-        y="index",
-        orient="h",
-        ax=ax,
-    )
-    plt.ylabel("Gruppe")
-    plt.xlabel("Veranstaltungshäufigkeit")
-    plt.xlim(0,max_freq+5)
-    return fig
-
-@render.plot
-def group_freq_barplot1():
-    create_barplot(0)
-
-@render.plot
-def group_freq_barplot2():
-    create_barplot(25)
+    with ui.card(full_screen=True):
+        ui.card_header("Veranstaltungshäufigkeit nach Gruppe")
+        @render_plotly()
+        def group_freq_barplot1():
+            return create_barplot()
