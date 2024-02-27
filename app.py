@@ -14,7 +14,7 @@ import numpy as np
 from faicons import icon_svg as icon
 
 # todos:
-# heatmap nach neuester veranstaltung sortieren
+#X heatmap nach neuester veranstaltung sortieren 
 # heatmap einklappbar machen
 # Veranstaltungssteigerung pro Monat ausrechnen und anzeigen
 # AUf Github verlinken
@@ -22,6 +22,7 @@ from faicons import icon_svg as icon
 # Gruppen mit Veranstaltung in letzten 12 Monaten
 # Gruppen mit offensichtlich mehreren Namen zusammenführen
 # Icons sinnvoll auswählen
+# den bug mit zukunft/vergangenheit lösen
 
 NOW = datetime.datetime.now()
 
@@ -164,7 +165,16 @@ with ui.layout_column_wrap():
             df = filter_df(df)
             str(round(df.groupby("event_year-month_str").counter.sum().reset_index().counter.mean()))
 
-    
+    with ui.value_box(showcase=icon("arrow-trend-up")):
+        "Events im Monat"
+        @render.express
+        def n_events3():
+            df = df_group_event.copy()
+            df = filter_df(df)
+            str(round(df.groupby("event_year-month_str").counter.sum().reset_index().counter.mean()))
+
+
+with ui.layout_column_wrap():
     with ui.value_box(showcase=icon("users")):
         "Gruppen"
         @render.express
@@ -182,6 +192,22 @@ with ui.layout_column_wrap():
             df = df.groupby("group").counter.sum().reset_index()
             df = df.loc[df.counter > 1]
             str(len(df.group.unique()))
+    
+    with ui.value_box(showcase=icon("users")):
+        "Gruppen aktiv letzte 6 Monate"
+        @render.express
+        def n_groups3():
+            df = df_group_event.copy()
+            df = filter_df(df)
+            n = 0
+            for group in df.group.unique():
+                df_group_temp = df.loc[df["group"]==group,:]
+                for i, row in df_group_temp.iterrows():
+                    if row["event_datetime"] >= datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=182):
+                        n += 1
+                        break
+            str(n)
+
             
 
 with ui.layout_column_wrap():
@@ -279,6 +305,8 @@ with ui.layout_column_wrap():
 
         df["total"] = df.groupby("group_label").counter.transform(sum)
 
+        
+
         df_monthly = (
             df
             .groupby(by=["group_label", "event_year-month_str"])
@@ -306,17 +334,18 @@ with ui.layout_column_wrap():
             .to_list()
         )
 
+        df_event_date = df.groupby("group_label").event_datetime.max().reset_index()
+        df_event_date = df_event_date.sort_values("event_datetime", ascending=True)
+        group_order_date = df_event_date.group_label.to_list()
+
         df_monthly_pivot.index = pd.CategoricalIndex(
             df_monthly_pivot.index,
-            categories=group_order,
+            categories=group_order_date,
             )
         df_monthly_pivot.sort_index(level=0, inplace=True, ascending=False)
         
-        fig, ax = plt.subplots()
-        fig.set_size_inches(20,20)
-        
         fig = px.imshow(
-            df_monthly_pivot,
+            df_monthly_pivot if (input.full_heatmap() or input.full_barplot()) else df_monthly_pivot[0:25],
             text_auto=False,
             color_continuous_scale='Greys',
             labels={
@@ -327,7 +356,7 @@ with ui.layout_column_wrap():
             zmax=4,
             )
         fig.update_layout(
-            height=HEIGHT1,
+            height=HEIGHT1 if (input.full_heatmap() or input.full_barplot()) else None,
             coloraxis_showscale=False,
             yaxis = dict(
                 tickfont = dict(size=FONT_SIZE1)),
@@ -339,8 +368,8 @@ with ui.layout_column_wrap():
         @render_plotly()
         def heatmap():
             return create_heatmap()
-        
-        ui.card_footer("Info: Werte >= 4 werden in derselben Farbe dargestellt.")
+        ui.input_switch("full_heatmap", "Alle Gruppen zeigen", False)
+        #ui.card_footer("Info: Werte >= 4 werden in derselben Farbe dargestellt.")
 
     def create_barplot():
         df = df_group_event.copy()
@@ -351,7 +380,7 @@ with ui.layout_column_wrap():
         max_freq = df.group_label.max()
 
         fig = px.bar(
-            data_frame=df, 
+            data_frame=df if (input.full_barplot() or input.full_heatmap()) else df[-25:], 
             x="group_label", 
             y="index", 
             orientation='h',
@@ -362,7 +391,7 @@ with ui.layout_column_wrap():
             )
 
         fig.update_layout(
-            height=HEIGHT1,
+            height=HEIGHT1 if (input.full_heatmap() or input.full_barplot()) else None,
             coloraxis_showscale=False,
             yaxis = dict(
                 tickfont = dict(size=FONT_SIZE1)),
@@ -375,3 +404,4 @@ with ui.layout_column_wrap():
         @render_plotly()
         def group_freq_barplot1():
             return create_barplot()
+        ui.input_switch("full_barplot", "Alle Gruppen anzeigen", False)
